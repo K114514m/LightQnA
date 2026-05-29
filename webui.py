@@ -1,6 +1,6 @@
 import os
 import streamlit as st
-import ner_model as zwk
+import ner_model as ner
 import pickle
 import ollama
 from transformers import BertTokenizer
@@ -8,36 +8,60 @@ import torch
 import py2neo
 import random
 import re
+import logging
+from typing import Dict, List, Tuple
+
+from config import settings
+from logging_setup import setup_logging
+from kg_client import (
+    KGClient,
+    build_attribute_prompt,
+    build_relation_prompt,
+)
+from intent_router import execute_intents
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 
 @st.cache_resource
-def load_model(cache_model):
+def load_model(cache_model: str):
+    """加载 NER 推理所需的全部资源（被 streamlit 缓存）。
+
+    返回 ``(glm_tokenizer, glm_model, bert_tokenizer, bert_model, idx2tag, rule, tfidf_r, device)``，
+    其中 ``glm_*`` 已废弃返回 ``None``，仅为保持原签名不破坏调用方。
+    """
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    #加载ChatGLM模型
-    # glm_tokenizer = AutoTokenizer.from_pretrained("model/chatglm3-6b-128k", trust_remote_code=True)
-    # glm_model = AutoModel.from_pretrained("model/chatglm3-6b-128k",trust_remote_code=True,device=device)
-    # glm_model.eval()
+    # ChatGLM 路径已废弃；保留 None 占位避免下游解包错误
     glm_model = None
-    glm_tokenizer= None
-    #加载Bert模型
-    with open('tmp_data/tag2idx.npy', 'rb') as f:
+    glm_tokenizer = None
+    # 加载 Bert 模型
+    with open(os.path.join(settings.TMP_DIR, 'tag2idx.npy'), 'rb') as f:
         tag2idx = pickle.load(f)
     idx2tag = list(tag2idx)
-    rule = zwk.rule_find()
-    tfidf_r = zwk.tfidf_alignment()
-    model_name = 'model/chinese-roberta-wwm-ext'
+    rule = ner.rule_find()
+    tfidf_r = ner.tfidf_alignment()
+    model_name = settings.NER_MODEL_NAME
     bert_tokenizer = BertTokenizer.from_pretrained(model_name)
-    bert_model = zwk.Bert_Model(model_name, hidden_size=128, tag_num=len(tag2idx), bi=True)
-    bert_model.load_state_dict(torch.load(f'model/{cache_model}.pt'))
-    
+    bert_model = ner.Bert_Model(model_name, hidden_size=128, tag_num=len(tag2idx), bi=True)
+    bert_model.load_state_dict(torch.load(
+        os.path.join(settings.MODEL_DIR, f'{cache_model}.pt')
+    ))
     bert_model = bert_model.to(device)
     bert_model.eval()
-    return glm_tokenizer,glm_model,bert_tokenizer,bert_model,idx2tag,rule,tfidf_r,device
+    return glm_tokenizer, glm_model, bert_tokenizer, bert_model, idx2tag, rule, tfidf_r, device
 
 
 
-def Intent_Recognition(query,choice):
+def Intent_Recognition(query: str, choice: str) -> str:
+    """调用 ollama 上的 LLM 做意图识别，返回 LLM 原始文本输出。
+
+    :param query: 用户问题
+    :param choice: ollama 模型名称
+    :return: LLM 输出文本，期望包含「查询XX」格式的意图标签列表，由
+             :func:`intent_router.execute_intents` 解析。
+    """
     prompt = f"""
 阅读下列提示，回答问题（问题在输入的最后）:
 当你试图识别用户问题中的查询意图时，你需要仔细分析问题，并在16个预定义的查询类别中一一进行判断。对于每一个类别，思考用户的问题是否含有与该类别对应的意图。如果判断用户的问题符合某个特定类别，就将该类别加入到输出列表中。这样的方法要求你对每一个可能的查询意图进行系统性的考虑和评估，确保没有遗漏任何一个可能的分类。
@@ -109,136 +133,60 @@ def Intent_Recognition(query,choice):
 再次检查你的输出都包含在**查询类别**:"查询疾病简介"、"查询疾病病因"、"查询疾病预防措施"、"查询疾病治疗周期"、"查询治愈概率"、"查询疾病易感人群"、"查询疾病所需药品"、"查询疾病宜吃食物"、"查询疾病忌吃食物"、"查询疾病所需检查项目"、"查询疾病所属科目"、"查询疾病的症状"、"查询疾病的治疗方法"、"查询疾病的并发疾病"、"查询药品的生产商"。
 """
     rec_result = ollama.generate(model=choice, prompt=prompt)['response']
-    print(f'意图识别结果:{rec_result}')
+    logger.debug('意图识别结果: %s', rec_result)
     return rec_result
-    # response, _ = glm_model.chat(glm_tokenizer, prompt, history=[])
-    # return response
 
 
-def add_shuxing_prompt(entity,shuxing,client):
-    add_prompt = ""
-    try:
-        sql_q = "match (a:疾病{名称:'%s'}) return a.%s" % (entity,shuxing)
-        res = client.run(sql_q).data()[0].values()
-        add_prompt+=f"<提示>"
-        add_prompt+=f"用户对{entity}可能有查询{shuxing}需求，知识库内容如下："
-        if len(res)>0:
-            join_res = "".join(res)
-            add_prompt+=join_res
-        else:
-            add_prompt+="图谱中无信息，查找失败。"
-        add_prompt+=f"</提示>"
-    except:
-        pass
-    return add_prompt
-def add_lianxi_prompt(entity,lianxi,target,client):
-    add_prompt = ""
-    
-    try:
-        sql_q = "match (a:疾病{名称:'%s'})-[r:%s]->(b:%s) return b.名称" % (entity,lianxi,target)
-        res = client.run(sql_q).data()#[0].values()
-        res = [list(data.values())[0] for data in res]
-        add_prompt+=f"<提示>"
-        add_prompt+=f"用户对{entity}可能有查询{lianxi}需求，知识库内容如下："
-        if len(res)>0:
-            join_res = "、".join(res)
-            add_prompt+=join_res
-        else:
-            add_prompt+="图谱中无信息，查找失败。"
-        add_prompt+=f"</提示>"
-    except:
-        pass
-    return add_prompt
-def generate_prompt(response,query,client,bert_model, bert_tokenizer,rule, tfidf_r, device, idx2tag):
-    entities = zwk.get_ner_result(bert_model, bert_tokenizer, query, rule, tfidf_r, device, idx2tag)
-    # print(response)
-    # print(entities)
-    yitu = []
+def add_shuxing_prompt(entity, shuxing, client):
+    """[转发] 查询疾病属性并生成 ``<提示>...</提示>`` 文本。
+
+    历史接口保留：第三个参数 ``client`` 既可以是 ``py2neo.Graph``，也可以是
+    :class:`kg_client.KGClient`。统一委托给 :class:`KGClient` 实现。
+    """
+    kg = client if isinstance(client, KGClient) else KGClient(client)
+    value = kg.get_disease_attribute(entity, shuxing)
+    return build_attribute_prompt(entity, shuxing, value)
+
+
+def add_lianxi_prompt(entity, lianxi, target, client):
+    """[转发] 查询疾病关系并生成 ``<提示>...</提示>`` 文本。"""
+    kg = client if isinstance(client, KGClient) else KGClient(client)
+    items = kg.get_related_entities(entity, lianxi, target)
+    return build_relation_prompt(entity, lianxi, items)
+def generate_prompt(
+    response: str,
+    query: str,
+    client,
+    bert_model,
+    bert_tokenizer,
+    rule,
+    tfidf_r,
+    device,
+    idx2tag,
+) -> Tuple[str, str, Dict[str, str]]:
+    """根据 LLM 意图识别输出与 NER 抽取结果，组装最终送给 LLM 的 prompt。
+
+    :return: ``(prompt, intents_str, entities)``；``intents_str`` 是「、」拼接的中文意图名。
+    """
+    entities = ner.get_ner_result(bert_model, bert_tokenizer, query, rule, tfidf_r, device, idx2tag)
+    # 统一封装为 KGClient（若调用方已传入 KGClient 则直接复用）
+    kg = client if isinstance(client, KGClient) else KGClient(client)
+    yitu: List[str] = []
     prompt = "<指令>你是一个医疗问答机器人，你需要根据给定的提示回答用户的问题。请注意，你的全部回答必须完全基于给定的提示，不可自由发挥。如果根据提示无法给出答案，立刻回答“根据已知信息无法回答该问题”。</指令>"
     prompt +="<指令>请你仅针对医疗类问题提供简洁和专业的回答。如果问题不是医疗相关的，你一定要回答“我只能回答医疗相关的问题。”，以明确告知你的回答限制。</指令>"
     if '疾病症状' in entities and  '疾病' not in entities:
-        sql_q = "match (a:疾病)-[r:疾病的症状]->(b:疾病症状 {名称:'%s'}) return a.名称" % (entities['疾病症状'])
-        res = list(client.run(sql_q).data()[0].values())
-        # print('res=',res)
+        # 修复：原 client.run(...).data()[0] 在空结果时 IndexError
+        res = kg.get_diseases_by_symptom(entities['疾病症状'])
         if len(res)>0:
             entities['疾病'] = random.choice(res)
             all_en = "、".join(res)
             prompt+=f"<提示>用户有{entities['疾病症状']}的情况，知识库推测其可能是得了{all_en}。请注意这只是一个推测，你需要明确告知用户这一点。</提示>"
     pre_len = len(prompt)
-    if "简介" in response:
-        if '疾病' in entities:
-            prompt+=add_shuxing_prompt(entities['疾病'],'疾病简介',client)
-            yitu.append('查询疾病简介')
-    if "病因" in response:
-        if '疾病' in entities:
-            prompt+=add_shuxing_prompt(entities['疾病'],'疾病病因',client)
-            yitu.append('查询疾病病因')
-    if "预防" in response:
-        if '疾病' in entities:
-            prompt+=add_shuxing_prompt(entities['疾病'],'预防措施',client)
-            yitu.append('查询预防措施')
-    if "治疗周期" in response:
-        if '疾病' in entities:
-            prompt+=add_shuxing_prompt(entities['疾病'],'治疗周期',client)
-            yitu.append('查询治疗周期')
-    if "治愈概率" in response:
-        if '疾病' in entities:
-            prompt+=add_shuxing_prompt(entities['疾病'],'治愈概率',client)
-            yitu.append('查询治愈概率')
-    if "易感人群" in response:
-        if '疾病' in entities:
-            prompt+=add_shuxing_prompt(entities['疾病'],'疾病易感人群',client)
-            yitu.append('查询疾病易感人群')
-    if "药品" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病使用药品','药品',client)
-            yitu.append('查询疾病使用药品')
-    if "宜吃食物" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病宜吃食物','食物',client)
-            yitu.append('查询疾病宜吃食物')
-    if "忌吃食物" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病忌吃食物','食物',client)
-            yitu.append('查询疾病忌吃食物')
-    if "检查项目" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病所需检查','检查项目',client)
-            yitu.append('查询疾病所需检查')
-    if "查询疾病所属科目" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病所属科目','科目',client)
-            yitu.append('查询疾病所属科目')
-    # if "所属科目" in response:
-    #     if '疾病' in entities:
-    #         prompt+=add_lianxi_prompt(entities['疾病'],'疾病所属科目','科目')
-    #         yitu.append('查询疾病所属科目')
-    if "症状" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病的症状','疾病症状',client)
-            yitu.append('查询疾病的症状')
-    if "治疗" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'治疗的方法','治疗方法',client)
-            yitu.append('查询治疗的方法')
-    if "并发" in response:
-        if '疾病' in entities:
-            prompt+=add_lianxi_prompt(entities['疾病'],'疾病并发疾病','疾病',client)
-            yitu.append('查询疾病并发疾病')
-    if "生产商" in response:
-        try:
-            sql_q = "match (a:药品商)-[r:生产]->(b:药品{名称:'%s'}) return a.名称" % (entities['药品'])
-            res = client.run(sql_q).data()[0].values()
-            prompt+=f"<提示>"
-            prompt+=f"用户对{entities['药品']}可能有查询药品生产商的需求，知识图谱内容如下："
-            if len(res)>0:
-                prompt+="".join(res)
-            else:
-                prompt+="图谱中无信息，查找失败"
-            prompt+=f"</提示>"
-        except:
-            pass
-        yitu.append('查询药物生产商')
+    # 用表驱动的意图路由替换原本 16 个重复 if 块；
+    # intent_router 内部已修复「治疗周期 vs 治疗方法」子串误匹配 bug。
+    intent_prompt, intent_names = execute_intents(response, entities, kg)
+    prompt += intent_prompt
+    yitu.extend(intent_names)
     if pre_len==len(prompt) :
         prompt += f"<提示>提示：知识库异常，没有相关信息！请你直接回答“根据已知信息无法回答该问题”！</提示>"
     prompt += f"<用户问题>{query}</用户问题>"
@@ -248,27 +196,33 @@ def generate_prompt(response,query,client,bert_model, bert_tokenizer,rule, tfidf
     prompt += f"<注意>你必须充分的利用提示中的知识，不可将提示中的任何信息遗漏，你必须做到对提示信息的充分整合。你回答的任何一句话必须在提示中有所体现！如果根据提示无法给出答案，你必须回答“根据已知信息无法回答该问题”。<注意>"
     
     
-    print(f'prompt:{prompt}')
+    logger.debug('prompt: %s', prompt)
     return prompt,"、".join(yitu),entities
 
 
 
 def ans_stream(prompt):
-    
-    result = ""
-    for res,his in glm_model.stream_chat(glm_tokenizer, prompt, history=[]):
-        yield res
+    """[已弃用] 旧版 ChatGLM 流式回答接口。
+
+    项目当前使用 ollama 通过 ``ollama.chat(..., stream=True)`` 在 ``main()`` 内直接
+    流式输出，已不再依赖 ChatGLM；此函数仅作为历史占位保留为空实现，避免外部潜在引用
+    报错。如需恢复 ChatGLM 流式回答，请实现一个接受 (model, tokenizer, prompt) 的版本。
+    """
+    raise NotImplementedError(
+        "ans_stream 已弃用，请使用 main() 中的 ollama.chat 流式调用"
+    )
 
 
 
-def main(is_admin, usname):
-    cache_model = 'best_roberta_rnn_model_ent_aug'
+def main(is_admin: bool, usname: str) -> None:
+    """Streamlit 主界面入口；由 ``login.py`` 在用户登录成功后调用。"""
+    cache_model = settings.NER_CHECKPOINT
     st.title(f"医疗智能问答机器人")
 
     with st.sidebar:
         col1, col2 = st.columns([0.6, 0.6])
         with col1:
-            st.image(os.path.join("img", "logo.jpg"), use_column_width=True)
+            st.image(os.path.join("img", "logo.jpg"), use_container_width=True)
 
         st.caption(
             f"""<p align="left">欢迎您，{'管理员' if is_admin else '用户'}{usname}！当前版本：{1.0}</p>""",
@@ -291,7 +245,7 @@ def main(is_admin, usname):
             label='请选择大语言模型:',
             options=['Qwen 1.5', 'Llama2-Chinese']
         )
-        choice = 'qwen:32b' if selected_option == 'Qwen 1.5' else 'llama2-chinese:13b-chat-q8_0'
+        choice = settings.OLLAMA_QWEN_MODEL if selected_option == 'Qwen 1.5' else settings.OLLAMA_LLAMA_MODEL
 
         show_ent = show_int = show_prompt = False
         if is_admin:
@@ -307,10 +261,16 @@ def main(is_admin, usname):
         if st.button("返回登录"):
             st.session_state.logged_in = False
             st.session_state.admin = False
-            st.experimental_rerun()
+            st.rerun()
 
     glm_tokenizer, glm_model, bert_tokenizer, bert_model, idx2tag, rule, tfidf_r, device = load_model(cache_model)
-    client = py2neo.Graph('http://localhost:7474', user='neo4j', password='wei8kang7.long', name='neo4j')
+    graph = py2neo.Graph(
+        settings.NEO4J_URL,
+        user=settings.NEO4J_USER,
+        password=settings.NEO4J_PASSWORD,
+        name=settings.NEO4J_DBNAME,
+    )
+    client = KGClient(graph)
 
     current_messages = st.session_state.messages[active_window_index]
 

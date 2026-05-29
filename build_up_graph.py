@@ -1,8 +1,14 @@
 import os
 import re
+import json
+import logging
 import py2neo
 from tqdm import tqdm
 import argparse
+
+from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 #导入普通实体
@@ -11,12 +17,12 @@ def import_entity(client,type,entity):
         order = """create (n:%s{名称:"%s"})"""%(type,name)
         client.run(order)
 
-    print(f'正在导入{type}类数据')
+    logger.info('正在导入 %s 类数据 (%d 个)', type, len(entity))
     for en in tqdm(entity):
         create_node(client,type,en)
 #导入疾病类实体
 def import_disease_data(client,type,entity):
-    print(f'正在导入{type}类数据')
+    logger.info('正在导入 %s 类数据 (%d 个)', type, len(entity))
     for disease in tqdm(entity):
         node = py2neo.Node(type,
                            名称=disease["名称"],
@@ -39,12 +45,14 @@ def create_all_relationship(client,all_relationship):
         create_relationship(client,type1, name1,relation, type2,name2)
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO,
+                        format='[%(asctime)s] %(levelname)s %(name)s: %(message)s')
     #连接数据库的一些参数
     parser = argparse.ArgumentParser(description="通过medical.json文件,创建一个知识图谱")
-    parser.add_argument('--website', type=str, default='http://localhost:7474', help='neo4j的连接网站')
-    parser.add_argument('--user', type=str, default='neo4j', help='neo4j的用户名')
-    parser.add_argument('--password', type=str, default='wei8kang7.long', help='neo4j的密码')
-    parser.add_argument('--dbname', type=str, default='neo4j', help='数据库名称')
+    parser.add_argument('--website', type=str, default=settings.NEO4J_URL, help='neo4j的连接网站')
+    parser.add_argument('--user', type=str, default=settings.NEO4J_USER, help='neo4j的用户名')
+    parser.add_argument('--password', type=str, default=settings.NEO4J_PASSWORD, help='neo4j的密码')
+    parser.add_argument('--dbname', type=str, default=settings.NEO4J_DBNAME, help='数据库名称')
     args = parser.parse_args()
 
     #连接...
@@ -75,7 +83,17 @@ if __name__ == "__main__":
     for i,data in enumerate(all_data):
         if (len(data) < 3):
             continue
-        data = eval(data[:-1])
+        # 修复：原代码使用 eval(data[:-1]) 解析每行 JSON：
+        #   1) eval 不安全；
+        #   2) 假设每行末尾必是 `,`，遇到最后一行（无尾逗号）会崩；
+        #   3) 遇行尾空白也会崩。
+        # 改为 rstrip + 去除末尾逗号 + json.loads。
+        line = data.rstrip().rstrip(',')
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning("跳过无法解析的 JSON 行: %s", line[:80])
+            continue
 
         disease_name = data.get("name","")
         all_entity["疾病"].append({
@@ -112,19 +130,18 @@ if __name__ == "__main__":
             relationship.append(("疾病", disease_name, "疾病所属科目", "科目",cure_department[-1]))
 
         symptom = data.get("symptom",[])
-        for i,sy in enumerate(symptom):
-            if symptom[i].endswith('...'):
-                symptom[i] = symptom[i][:-3]
+        # 清洗症状名末尾的省略号（数据集偶尔有 'XXX症状...' 这种值）。
+        # 原代码 for i, sy in enumerate(symptom) 但只用 symptom[i]，sy 变量被忽略，逻辑混乱。
+        symptom = [s[:-3] if isinstance(s, str) and s.endswith('...') else s for s in symptom]
         all_entity["疾病症状"].extend(symptom)
         if symptom:
             relationship.extend([("疾病", disease_name, "疾病的症状", "疾病症状",sy )for sy in symptom])
 
         cure_way = data.get("cure_way", [])
         if cure_way:
-            for i,cure_w in enumerate(cure_way):
-                if(isinstance(cure_way[i], list)):
-                    cure_way[i] = cure_way[i][0] #glm处理数据集偶尔有格式错误
-            cure_way = [s for s in cure_way if len(s) >= 2]
+            # glm 处理数据集偶尔有格式错误：把字符串包成 list，这里展平
+            cure_way = [c[0] if isinstance(c, list) else c for c in cure_way]
+            cure_way = [s for s in cure_way if isinstance(s, str) and len(s) >= 2]
             all_entity["治疗方法"].extend(cure_way)
             relationship.extend([("疾病", disease_name, "治疗的方法", "治疗方法", cure_w) for cure_w in cure_way])
             

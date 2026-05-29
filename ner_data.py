@@ -3,8 +3,12 @@ import random
 #自动机 用于字符串匹配
 import ahocorasick
 import re
+import json
+import logging
 from tqdm import tqdm
 import sys
+
+logger = logging.getLogger(__name__)
 class Build_Ner_data():
     """
         这是一个ner数据生成类。主要作用是将data文件夹下的medical.json文件中的文本打上标签。
@@ -35,7 +39,9 @@ class Build_Ner_data():
         :rtype: list
         """
         text = text.replace('\n',',')
-        pattern = r'([，。！；：,.?!;])(?=.)|[？,]'
+        # 修复：原正则 r'([，。！；：,.?!;])(?=.)|[？,]' 中 `,` 重复出现且 (?=.) 让分隔符
+        # 在末尾零宽断言失败，导致行尾标点丢失。改为简单的捕获分组切分，让标点保留为偶数索引项。
+        pattern = r'([，。！？；：,.?!;])'
 
         sentences = []
 
@@ -105,7 +111,9 @@ def build_file(all_text,all_label):
                 f.write(f'{t} {l}\n')
             f.write('\n')
 if __name__ == "__main__":
-    print('hehe')
+    logging.basicConfig(level=logging.INFO,
+                        format='[%(asctime)s] %(levelname)s %(name)s: %(message)s')
+    logger.info('开始构建 NER 训练数据')
     with open(os.path.join('data','medical.json'),'r',encoding='utf-8') as f:
         all_data = f.read().split('\n')
     build_ner_data = Build_Ner_data()
@@ -115,7 +123,14 @@ if __name__ == "__main__":
     for data in tqdm(all_data):
         if len(data)<2:
             continue
-        data = eval(data)
+        # 修复：原代码使用 eval 解析每行 JSON，既不安全也不健壮（遇到末尾非闭合行会崩）。
+        # 改用 json.loads；同时容错单行带尾随逗号的情况。
+        line = data.rstrip().rstrip(',')
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            logger.warning("跳过无法解析的 JSON 行: %s", line[:80])
+            continue
         data_text = [data.get("desc",""),data.get("prevent", ""),data.get("cause", "")]
 
         data_text_split = []

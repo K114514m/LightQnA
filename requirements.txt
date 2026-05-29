@@ -15,5 +15,10 @@ tqdm==4.66.2
 transformers==4.39.0
 typer==0.12.3
 zhipuai==2.0.1
-torch==2.2.1+cu118
+# torch: 原本固定为 2.2.1+cu118，已放宽。GPU 用户请按自身 CUDA 版本从
+#   https://pytorch.org/get-started/previous-versions/ 自行安装匹配的 wheel；
+#   CPU 用户安装默认 wheel 即可。
+torch>=2.2,<2.4
 peft==0.10.0
+# dev：单元测试使用，可选
+pytest>=7.0

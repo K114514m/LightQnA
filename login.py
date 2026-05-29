@@ -1,6 +1,24 @@
+"""Streamlit 登录 / 注册入口。
+
+启动方式::
+
+    streamlit run login.py
+
+登录成功后会调用 :func:`webui.main` 进入主界面。
+"""
+
+from __future__ import annotations
+
 import streamlit as st
-from user_data_storage import credentials, write_credentials, storage_file, Credentials
+
+from user_data_storage import (
+    Credentials,
+    credentials,
+    storage_file,
+    write_credentials,
+)
 from webui import main
+
 # 初始化会话状态
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -8,13 +26,16 @@ if 'admin' not in st.session_state:
     st.session_state.admin = False
 if 'usname' not in st.session_state:
     st.session_state.usname = ""
-def login_page():
+
+
+def login_page() -> None:
+    """渲染登录表单并校验。"""
     with st.form("login_form"):
         st.title("登录")
         username = st.text_input("用户名", value="")
         password = st.text_input("密码", value="", type="password")
         submit = st.form_submit_button("登录")
-        
+
         if submit:
             user_cred = credentials.get(username)
             if user_cred and user_cred.password == password:
@@ -22,27 +43,31 @@ def login_page():
                 st.session_state.logged_in = True
                 st.session_state.admin = user_cred.is_admin
                 st.session_state.usname = username
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("用户名或密码错误，请重新输入。")
 
-def register_page():
+
+def register_page() -> None:
+    """渲染注册表单并写入凭证文件。"""
     with st.form("register_form"):
         st.title("注册")
         new_username = st.text_input("设置用户名", value="")
         new_password = st.text_input("设置密码", value="", type="password")
         is_admin = False
         register_submit = st.form_submit_button("注册")
-        
+
         if register_submit:
             if new_username in credentials:
                 st.error("用户名已存在，请使用其他用户名。")
             else:
+                # SECURITY: 当前为明文存储，仅供 demo；生产部署必须替换为加盐哈希
                 new_user = Credentials(new_username, new_password, is_admin)
                 credentials[new_username] = new_user
                 write_credentials(storage_file, credentials)
                 st.success(f"用户 {new_username} 注册成功！请登录。")
-                st.experimental_rerun()
+                st.rerun()
+
 
 if __name__ == "__main__":
     if not st.session_state.logged_in:
@@ -54,4 +79,4 @@ if __name__ == "__main__":
         elif app_mode == "注册":
             register_page()
     else:
-        main(st.session_state.admin,st.session_state.usname)
+        main(st.session_state.admin, st.session_state.usname)
