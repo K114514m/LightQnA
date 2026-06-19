@@ -1,9 +1,14 @@
-import ollama
 import os
+import sys
+from pathlib import Path
 from zhipuai import ZhipuAI
 from tqdm import tqdm
 import json
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from llm_client import openai_compatible_generate
+
 os.chdir(os.path.dirname(__file__))#vscode要用
 import pandas as pd
 def append_data_to_json(data, filename):
@@ -23,7 +28,7 @@ for i,content in enumerate(tqdm(content_list[5000:])):
     问题：{content}
     请注意 ，如果问题中没有出现具体的疾病特征，一律回答“否”。如果只是询问某种药物(和具体疾病没关系)，回答“否”。
     """
-    response = ollama.generate(model='qwen:32b', prompt=prompt)['response']
+    response = openai_compatible_generate(prompt)
     
     if response!='是':
         continue

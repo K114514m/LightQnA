@@ -1,7 +1,10 @@
-import os
+import sys
 from tqdm import tqdm
 import json
-import ollama
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from llm_client import openai_compatible_generate
 
 def get_cure_way_result(problem):
     prompt = f"""
@@ -40,7 +43,7 @@ def get_cure_way_result(problem):
 
 【仅输出如下格式的答案，不要包含任何其他文本或说明。】
     """
-    response = ollama.generate(model='qwen:32b', prompt=prompt)['response']
+    response = openai_compatible_generate(prompt)
     # print(response)
     return eval(response)
 
@@ -85,10 +88,7 @@ def get_drug_detail_result(problem):
 对于给定的文本，识别并提取具体的药物名称和药品商名称,并输出。中间用逗号(英文)分隔，如果不知道厂商，请输出“未知”。
 【仅输出如下格式的答案，不要包含任何其他文本或说明。】
 """
-    response = ollama.generate(model='qwen:32b', prompt=prompt)['response']
-    # print(response)
-    return response
-    response = ollama.generate(model='qwen:32b', prompt=prompt)['response']
+    response = openai_compatible_generate(prompt)
     # print(response)
     return response
 

@@ -120,15 +120,61 @@ Neo4j 图数据库精确检索，44,656 实体 + 312,159 关系
 ## 🚀 快速开始（从零跑通全流程）
 
 > [!IMPORTANT]
-> 本项目运行需要 **3 个核心依赖全部就位**才能正常工作：
+> 当前主流程已切换为 **LightRAG 全链路模式**，运行需要以下核心依赖就位：
 >
 > | # | 依赖 | 缺失后果 |
 > |---|---|---|
-> | 1 | **Neo4j 知识图谱** | 所有知识查询返回空 → 回答全是"无法回答" |
-> | 2 | **NER 模型权重** | `load_model` 直接崩溃 |
-> | 3 | **ollama + LLM** | 意图识别和答案生成都无法工作 |
+> | 1 | **Neo4j Bolt 服务** | LightRAG 图存储无法初始化 |
+> | 2 | **ollama LLM 或 OpenAI-compatible API LLM** | 文档建图和答案生成无法工作 |
+> | 3 | **ollama embedding 模型** | 向量索引和检索无法工作 |
 >
 > 请务必**按顺序完成以下 6 步**。
+
+---
+
+### 当前主流程 · LightRAG 从零运行
+
+旧版 BERT NER、`kg_client.py`、`intent_router.py` 和 `build_up_graph.py` 已保留为 legacy 代码；当前 `webui.py` 默认直接调用 LightRAG 完成建图检索和回答生成。
+
+```bash
+conda create -n ragqna python=3.10 -y
+conda activate ragqna
+pip install -r requirements.txt
+```
+
+启动 Neo4j 后设置 Bolt 连接参数：
+
+```bash
+export NEO4J_URI=neo4j://localhost:7687
+export NEO4J_USERNAME=neo4j
+export NEO4J_PASSWORD='<你的Neo4j密码>'
+export NEO4J_DATABASE=neo4j
+```
+
+准备 LLM。若继续使用本地 Ollama：
+
+```bash
+ollama pull qwen:32b
+ollama pull bge-m3:latest
+```
+
+若使用远程 OpenAI-compatible API 调用更大的模型，只保留本地 embedding 模型即可：
+
+```bash
+ollama pull bge-m3:latest
+cp .env.example .env
+# 编辑 .env，填入 LLM_API_KEY、LLM_API_BASE 和 LLM_MODEL
+```
+
+构建 LightRAG 索引并做命令行验证：
+
+```bash
+python build_lightrag_index.py --source data/medical_new_2.json --reset --limit 100
+python lightrag_query.py "百日咳有什么症状，怎么治疗？"
+streamlit run login.py
+```
+
+如果显存不足，可以只把生成模型切到 API，embedding 继续用本地 `bge-m3:latest`；这样通常不需要先重建现有索引。
 
 ---
 
@@ -316,9 +362,9 @@ Epoch 19 验证: loss=0.08, f1=0.974
 
 ---
 
-### 步骤 5 · 安装 ollama 并拉取 LLM
+### 步骤 5 · 准备 embedding 与生成模型
 
-本项目使用 [ollama](https://ollama.com/) 在本地部署大语言模型，用于**意图识别**和**答案生成**两个环节。
+当前主流程使用 LightRAG。默认保留 [ollama](https://ollama.com/) 本地 embedding 模型 `bge-m3:latest`，生成模型可以使用本地 Ollama，也可以切到 OpenAI-compatible API。
 
 **安装 ollama**：
 
@@ -326,14 +372,26 @@ Epoch 19 验证: loss=0.08, f1=0.974
 curl -fsSL https://ollama.com/install.sh | sh
 ```
 
-**拉取模型**（二选一或都拉）：
+**至少拉取本地 embedding 模型**：
 
 ```bash
-# Qwen 1.5（推荐，中文效果好）
-ollama pull qwen:32b         # 需要 ~20GB 显存；资源不够可用 qwen:7b
+ollama pull bge-m3:latest
+```
 
-# Llama2-Chinese（备选）
-ollama pull llama2-chinese:13b-chat-q8_0
+如果继续使用本地生成模型，再拉取 Qwen：
+
+```bash
+ollama pull qwen:32b         # 需要 ~20GB 显存；资源不够可用 qwen:7b
+```
+
+如果使用远程 API 生成模型，配置 `.env`：
+
+```bash
+LLM_PROVIDER=openai_compatible
+LLM_API_BASE=https://aihubmix.com/v1/chat/completions
+LLM_API_KEY=<你的API Key>
+LLM_MODEL=qwen32b
+LIGHTRAG_LLM_MODEL=qwen32b
 ```
 
 > [!TIP]
@@ -344,16 +402,16 @@ ollama pull llama2-chinese:13b-chat-q8_0
 > ```
 > 通过环境变量 `OLLAMA_QWEN_MODEL` 覆盖默认的 `qwen:32b`。
 
-**验证 ollama 是否正常工作**：
+**验证本地生成模型是否正常工作**：
 
 ```bash
 ollama run qwen:32b "你好，请用一句话介绍自己"
 # 应返回一段中文回答
 ```
 
-**ollama 在系统中的角色**：
-- **意图识别**：`webui.py` 中的 `Intent_Recognition()` 函数调用 `ollama.generate()` 让 LLM 分析用户问题属于 16 类意图中的哪几类
-- **答案生成**：`main()` 函数调用 `ollama.chat(..., stream=True)` 让 LLM 根据知识图谱检索结果流式生成回答
+**模型在系统中的角色**：
+- **生成模型**：`lightrag_adapter.py` 根据 `LLM_PROVIDER` 选择 Ollama 或 OpenAI-compatible API
+- **embedding 模型**：默认仍由 Ollama 的 `bge-m3:latest` 提供；更换 embedding 模型通常需要重建 LightRAG 索引
 
 ---
 
@@ -381,8 +439,8 @@ streamlit run login.py
 | `model/chinese-roberta-wwm-ext/` 存在 | 目录下有 `config.json` + `vocab.txt` | 回到步骤 4 |
 | `model/best_roberta_rnn_model_ent_aug.pt` 存在 | `ls model/*.pt` | 回到步骤 4 |
 | `tmp_data/tag2idx.npy` 存在 | `ls tmp_data/tag2idx.npy` | 回到步骤 4 |
-| ollama 服务正在运行 | `ollama list` 能看到已拉取的模型 | 回到步骤 5 |
-| 至少一个 LLM 已拉取 | `ollama list` 中有 `qwen:32b` 或你设的模型 | 回到步骤 5 |
+| ollama 服务正在运行 | `ollama list` 能看到 `bge-m3:latest` | 回到步骤 5 |
+| 生成模型可用 | 本地模式看 `ollama list`；API 模式确认 `.env` 中 `LLM_API_KEY`、`LLM_API_BASE`、`LLM_MODEL` 已设置 | 回到步骤 5 |
 
 全部 ✓ 后即可启动！
 
@@ -664,6 +722,13 @@ LLM 被严格约束为**只能基于 `<提示>` 中的知识图谱信息回答**
 | `NEO4J_DBNAME` | `neo4j` | 数据库名 |
 | `OLLAMA_QWEN_MODEL` | `qwen:32b` | Qwen 模型在 ollama 中的标签 |
 | `OLLAMA_LLAMA_MODEL` | `llama2-chinese:13b-chat-q8_0` | Llama2 模型标签 |
+| `LLM_PROVIDER` | 自动：有 `LLM_API_KEY` 时为 `openai_compatible`，否则为 `ollama` | LightRAG 生成模型提供方 |
+| `LLM_API_BASE` | `https://api.openai.com/v1` | OpenAI-compatible API 地址 |
+| `LLM_API_KEY` | *(请自行设置)* | OpenAI-compatible API key |
+| `LLM_MODEL` | `gpt-4o` | API 模型名 |
+| `LLM_TEMPERATURE` | `0.2` | API 生成温度 |
+| `LLM_TOP_P` | `1.0` | API top_p |
+| `LLM_MAX_TOKENS` | `0` | API 最大输出 token，`0` 表示使用服务端默认值 |
 | `NER_MODEL_NAME` | `model/chinese-roberta-wwm-ext` | BERT base 模型路径 |
 | `NER_CHECKPOINT` | `best_roberta_rnn_model_ent_aug` | NER 权重文件名（不含 `.pt`） |
 | `DATA_DIR` | `data` | 数据目录 |
@@ -686,10 +751,15 @@ LLM 被严格约束为**只能基于 `<提示>` 中的知识图谱信息回答**
 
 **🔄 LLM 模型可替换为最新版本**
 
-当前默认使用 `qwen:32b`，但 ollama 生态已支持更强的模型（如 Qwen2.5、Llama3、DeepSeek 等）。只需修改环境变量即可无缝切换：
+当前默认兼容本地 `qwen:32b`，也可以通过 OpenAI-compatible API 使用更大的远程模型。只需修改环境变量即可切换：
 
 ```bash
 export OLLAMA_QWEN_MODEL=qwen2.5:32b   # 或任何 ollama 支持的模型
+# 或者：
+export LLM_PROVIDER=openai_compatible
+export LLM_API_BASE=https://aihubmix.com/v1/chat/completions
+export LLM_API_KEY='<你的API Key>'
+export LLM_MODEL=qwen32b
 ```
 
 更强的 LLM 意味着更精准的意图识别和更高质量的答案生成，无需改动任何代码。

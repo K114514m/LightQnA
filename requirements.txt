@@ -2,9 +2,13 @@ datasets==2.18.0
 jieba==0.42.1
 nltk==3.8.1
 numpy==1.26.4
-ollama==0.2.0
+ollama>=0.4.5,<1.0.0
+openai>=1.0.0,<2.0.0
 pandas==2.2.2
 py2neo==2021.2.4
+neo4j>=5
+lightrag-hku>=1.4.16,<1.5
+python-dotenv>=1.0.1
 pyahocorasick==2.1.0
 rouge_chinese==1.0.3
 ruamel.base==1.0.0

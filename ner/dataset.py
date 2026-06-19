@@ -93,7 +93,7 @@ class Entity_Extend:
     """实体级数据增强：替换 / 掩码 / 拼接。"""
 
     def __init__(self) -> None:
-        eneities_path = os.path.join('data', 'ent')
+        eneities_path = os.path.join('data', 'ent_aug')
         files = os.listdir(eneities_path)
         files = [docu for docu in files if '.py' not in docu]
 
