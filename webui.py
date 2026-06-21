@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, List
 
 import streamlit as st
 
+from conversation_store import (
+    add_message,
+    create_conversation,
+    get_or_create_default_conversation,
+    list_conversations,
+    list_messages,
+    recent_history,
+)
 from config import settings
 from lightrag_adapter import (
     finalize_lightrag,
@@ -20,17 +27,6 @@ from logging_setup import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
-
-
-def _conversation_history(messages: List[Dict[str, str]]) -> list[dict[str, str]]:
-    """Return recent chat history in LightRAG's expected shape."""
-    history: list[dict[str, str]] = []
-    for message in messages[-10:]:
-        role = message.get("role")
-        content = message.get("content")
-        if role in {"user", "assistant"} and content:
-            history.append({"role": role, "content": content})
-    return history
 
 
 async def _ask_lightrag(question: str, history: list[dict[str, str]]) -> str:
@@ -54,9 +50,14 @@ def _debug_payload() -> dict[str, str]:
     }
 
 
-def main(is_admin: bool, usname: str) -> None:
+def _conversation_label(conversation_id: int, labels: dict[int, str]) -> str:
+    return labels.get(conversation_id, f"对话 {conversation_id}")
+
+
+def main(is_admin: bool, usname: str, user_id: int) -> None:
     """Streamlit 主界面入口；由 ``login.py`` 在用户登录成功后调用。"""
     st.title("医疗智能问答机器人")
+    active_key = f"active_conversation_id_{user_id}"
 
     with st.sidebar:
         col1, _ = st.columns([0.6, 0.6])
@@ -70,17 +71,31 @@ def main(is_admin: bool, usname: str) -> None:
         st.caption(f"LightRAG LLM: {settings.LIGHTRAG_LLM_MODEL}")
         st.caption(f"检索模式: {settings.LIGHTRAG_QUERY_MODE}")
 
-        if "chat_windows" not in st.session_state:
-            st.session_state.chat_windows = [[]]
-            st.session_state.messages = [[]]
-
         if st.button("新建对话窗口"):
-            st.session_state.chat_windows.append([])
-            st.session_state.messages.append([])
+            conversation = create_conversation(user_id)
+            st.session_state[active_key] = conversation.id
+            st.rerun()
 
-        window_options = [f"对话窗口 {i + 1}" for i in range(len(st.session_state.chat_windows))]
-        selected_window = st.selectbox("请选择对话窗口:", window_options)
-        active_window_index = int(selected_window.split()[1]) - 1
+        conversations = list_conversations(user_id)
+        if not conversations:
+            conversations = [get_or_create_default_conversation(user_id)]
+
+        conversation_ids = [conversation.id for conversation in conversations]
+        if st.session_state.get(active_key) not in conversation_ids:
+            st.session_state[active_key] = conversation_ids[0]
+
+        labels = {
+            conversation.id: f"{conversation.title} #{conversation.id}"
+            for conversation in conversations
+        }
+        selected_conversation_id = st.selectbox(
+            "请选择对话窗口:",
+            conversation_ids,
+            index=conversation_ids.index(st.session_state[active_key]),
+            format_func=lambda value: _conversation_label(value, labels),
+        )
+        active_conversation_id = int(selected_conversation_id)
+        st.session_state[active_key] = active_conversation_id
 
         show_ent = show_int = show_prompt = False
         if is_admin:
@@ -93,9 +108,11 @@ def main(is_admin: bool, usname: str) -> None:
         if st.button("返回登录"):
             st.session_state.logged_in = False
             st.session_state.admin = False
+            st.session_state.usname = ""
+            st.session_state.user_id = None
             st.rerun()
 
-    current_messages = st.session_state.messages[active_window_index]
+    current_messages = list_messages(active_conversation_id)
 
     for message in current_messages:
         with st.chat_message(message["role"]):
@@ -111,8 +128,9 @@ def main(is_admin: bool, usname: str) -> None:
                     with st.expander("LightRAG 配置"):
                         st.write(message.get("prompt", runtime_summary()))
 
-    if query := st.chat_input("Ask me anything!", key=f"chat_input_{active_window_index}"):
-        history = _conversation_history(current_messages)
+    if query := st.chat_input("Ask me anything!", key=f"chat_input_{active_conversation_id}"):
+        history = recent_history(active_conversation_id, limit=10)
+        add_message(active_conversation_id, "user", query)
         current_messages.append({"role": "user", "content": query})
         with st.chat_message("user"):
             st.markdown(query)
@@ -153,5 +171,11 @@ def main(is_admin: bool, usname: str) -> None:
                 "ent": debug_payload["ent"],
             }
         )
-
-    st.session_state.messages[active_window_index] = current_messages
+        add_message(
+            active_conversation_id,
+            "assistant",
+            answer,
+            yitu=debug_payload["yitu"],
+            prompt=debug_payload["prompt"],
+            ent=debug_payload["ent"],
+        )

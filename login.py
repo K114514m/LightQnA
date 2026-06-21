@@ -11,13 +11,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-from user_data_storage import (
-    Credentials,
-    credentials,
-    storage_file,
-    write_credentials,
-)
+from auth_service import authenticate_user, create_user, get_user_by_username, init_auth_store
 from webui import main
+
+init_auth_store()
 
 # 初始化会话状态
 if 'logged_in' not in st.session_state:
@@ -26,6 +23,8 @@ if 'admin' not in st.session_state:
     st.session_state.admin = False
 if 'usname' not in st.session_state:
     st.session_state.usname = ""
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
 
 
 def login_page() -> None:
@@ -37,12 +36,13 @@ def login_page() -> None:
         submit = st.form_submit_button("登录")
 
         if submit:
-            user_cred = credentials.get(username)
-            if user_cred and user_cred.password == password:
+            user = authenticate_user(username, password)
+            if user:
                 st.success("登录成功！")
                 st.session_state.logged_in = True
-                st.session_state.admin = user_cred.is_admin
-                st.session_state.usname = username
+                st.session_state.admin = user.is_admin
+                st.session_state.usname = user.username
+                st.session_state.user_id = user.id
                 st.rerun()
             else:
                 st.error("用户名或密码错误，请重新输入。")
@@ -58,15 +58,16 @@ def register_page() -> None:
         register_submit = st.form_submit_button("注册")
 
         if register_submit:
-            if new_username in credentials:
+            if get_user_by_username(new_username):
                 st.error("用户名已存在，请使用其他用户名。")
             else:
-                # SECURITY: 当前为明文存储，仅供 demo；生产部署必须替换为加盐哈希
-                new_user = Credentials(new_username, new_password, is_admin)
-                credentials[new_username] = new_user
-                write_credentials(storage_file, credentials)
-                st.success(f"用户 {new_username} 注册成功！请登录。")
-                st.rerun()
+                try:
+                    user = create_user(new_username, new_password, is_admin=is_admin)
+                except ValueError as exc:
+                    st.error(str(exc))
+                else:
+                    st.success(f"用户 {user.username} 注册成功！请登录。")
+                    st.rerun()
 
 
 if __name__ == "__main__":
@@ -79,4 +80,9 @@ if __name__ == "__main__":
         elif app_mode == "注册":
             register_page()
     else:
-        main(st.session_state.admin, st.session_state.usname)
+        if st.session_state.user_id is None:
+            st.session_state.logged_in = False
+            st.session_state.admin = False
+            st.session_state.usname = ""
+            st.rerun()
+        main(st.session_state.admin, st.session_state.usname, int(st.session_state.user_id))
