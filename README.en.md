@@ -1,7 +1,8 @@
 # LightQnA
 
-<details>
-<summary><strong>中文</strong></summary>
+[中文](#中文) | [日本語](#日本語) | [English](#english)
+
+## 中文
 
 ## 项目简介
 
@@ -146,10 +147,7 @@ password: admin123
 python scripts/lightrag_query.py "百日咳有哪些症状和治疗方法？"
 ```
 
-</details>
-
-<details>
-<summary><strong>日本語</strong></summary>
+## 日本語
 
 ## プロジェクト概要
 
@@ -294,10 +292,7 @@ CLI からも検索できます。
 python scripts/lightrag_query.py "百日咳の症状と治療法は？"
 ```
 
-</details>
-
-<details open>
-<summary><strong>English</strong></summary>
+## English
 
 ## Project Overview
 
@@ -441,5 +436,3 @@ You can also query from the command line:
 ```bash
 python scripts/lightrag_query.py "What are the symptoms and treatments for pertussis?"
 ```
-
-</details>
