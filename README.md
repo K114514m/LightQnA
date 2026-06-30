@@ -2,8 +2,6 @@
 
 [中文](#中文) | [日本語](#日本語) | [English](#english)
 
-## 中文
-
 ## 项目简介
 
 LightQnA 是一个基于 LightRAG 的本地医学问答项目，用 Streamlit 提供登录、注册、多轮对话和多语言界面，并通过 LightRAG + Neo4j 构建医学知识检索能力。项目支持本地 Ollama 模型或 OpenAI 兼容 API 作为生成模型。
@@ -147,7 +145,6 @@ password: admin123
 python scripts/lightrag_query.py "百日咳有哪些症状和治疗方法？"
 ```
 
-## 日本語
 
 ## プロジェクト概要
 
@@ -292,7 +289,6 @@ CLI からも検索できます。
 python scripts/lightrag_query.py "百日咳の症状と治療法は？"
 ```
 
-## English
 
 ## Project Overview
 
