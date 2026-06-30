@@ -71,3 +71,85 @@ def test_conversation_messages_are_user_scoped_and_ordered(monkeypatch, tmp_path
         {"role": "assistant", "content": "第一答"},
     ]
     assert [conversation.id for conversation in bob_conversations] == [bob_conversation.id]
+
+
+def test_rename_conversation_is_user_scoped(monkeypatch, tmp_path):
+    auth_service, conversation_store = _reload_modules(monkeypatch, tmp_path)
+    auth_service.init_auth_store()
+    alice = auth_service.create_user("alice", "secret")
+    bob = auth_service.create_user("bob", "secret")
+
+    alice_conversation = conversation_store.create_conversation(alice.id)
+
+    assert conversation_store.rename_conversation(
+        alice.id, alice_conversation.id, "复诊记录"
+    )
+    assert not conversation_store.rename_conversation(
+        bob.id, alice_conversation.id, "越权改名"
+    )
+
+    [conversation] = conversation_store.list_conversations(alice.id)
+    assert conversation.title == "复诊记录"
+
+
+def test_delete_conversation_is_user_scoped_and_removes_messages(monkeypatch, tmp_path):
+    auth_service, conversation_store = _reload_modules(monkeypatch, tmp_path)
+    auth_service.init_auth_store()
+    alice = auth_service.create_user("alice", "secret")
+    bob = auth_service.create_user("bob", "secret")
+
+    conversation = conversation_store.create_conversation(alice.id)
+    conversation_store.add_message(conversation.id, "user", "要删除的问题")
+
+    assert not conversation_store.delete_conversation(bob.id, conversation.id)
+    assert conversation_store.list_messages(conversation.id) == [
+        {"role": "user", "content": "要删除的问题"}
+    ]
+
+    assert conversation_store.delete_conversation(alice.id, conversation.id)
+    assert conversation_store.list_conversations(alice.id) == []
+    assert conversation_store.list_messages(conversation.id) == []
+
+
+def test_legacy_message_debug_columns_are_removed(monkeypatch, tmp_path):
+    auth_service, conversation_store = _reload_modules(monkeypatch, tmp_path)
+    auth_service.init_auth_store()
+    user = auth_service.create_user("alice", "secret")
+    conversation = conversation_store.create_conversation(user.id)
+
+    import app_database
+
+    with app_database.get_connection() as conn:
+        conn.executescript(
+            """
+            DROP TABLE messages;
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                content TEXT NOT NULL,
+                ent TEXT,
+                yitu TEXT,
+                prompt TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO messages (conversation_id, role, content, ent, yitu, prompt)
+            VALUES (?, 'assistant', '旧答', '旧实体', '旧路由', '旧配置')
+            """,
+            (conversation.id,),
+        )
+
+    app_database.init_db()
+
+    with app_database.get_connection() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)")}
+
+    assert {"ent", "yitu", "prompt"}.isdisjoint(columns)
+    assert conversation_store.list_messages(conversation.id) == [
+        {"role": "assistant", "content": "旧答"}
+    ]

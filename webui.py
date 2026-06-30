@@ -2,28 +2,33 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 
 import streamlit as st
 
+from auth_service import revoke_auth_session
 from conversation_store import (
     add_message,
     create_conversation,
+    delete_conversation,
     get_or_create_default_conversation,
     list_conversations,
     list_messages,
     recent_history,
+    rename_conversation,
 )
-from config import settings
+from i18n import DEFAULT_LANGUAGE, LANGUAGES, normalize_language, t
 from lightrag_adapter import (
     finalize_lightrag,
     initialize_lightrag,
     query_lightrag,
     run_async,
-    runtime_summary,
 )
 from logging_setup import setup_logging
+from session_query import clear_query_session_token, get_query_session_token
+from ui_theme import apply_apple_style, render_page_hero
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -42,36 +47,44 @@ def ask_lightrag(question: str, history: list[dict[str, str]]) -> str:
     return run_async(_ask_lightrag(question, history))
 
 
-def _debug_payload() -> dict[str, str]:
-    return {
-        "ent": "LightRAG 全链路模式：未使用独立 BERT NER；实体和关系由 LightRAG 在索引阶段抽取。",
-        "yitu": f"LightRAG query mode={settings.LIGHTRAG_QUERY_MODE}；未使用固定 16 类意图路由。",
-        "prompt": runtime_summary(),
-    }
-
-
-def _conversation_label(conversation_id: int, labels: dict[int, str]) -> str:
-    return labels.get(conversation_id, f"对话 {conversation_id}")
+def _conversation_label(
+    conversation_id: int, labels: dict[int, str], lang: str
+) -> str:
+    return labels.get(conversation_id, t(lang, "conversation"))
 
 
 def main(is_admin: bool, usname: str, user_id: int) -> None:
     """Streamlit 主界面入口；由 ``login.py`` 在用户登录成功后调用。"""
-    st.title("医疗智能问答机器人")
+    apply_apple_style()
+    if "lang" not in st.session_state:
+        st.session_state.lang = DEFAULT_LANGUAGE
+    else:
+        st.session_state.lang = normalize_language(st.session_state.lang)
+    lang = st.session_state.lang
+    render_page_hero(
+        t(lang, "app_title"),
+        t(lang, "app_subtitle"),
+    )
     active_key = f"active_conversation_id_{user_id}"
+    rename_key = f"rename_conversation_id_{user_id}"
+    delete_key = f"delete_conversation_id_{user_id}"
 
     with st.sidebar:
-        col1, _ = st.columns([0.6, 0.6])
-        with col1:
-            st.image(os.path.join("img", "logo.jpg"), use_column_width=True)
+        # Streamlit 1.32 supports use_column_width for images.
+        logo_path = os.path.join("img", "logo.jpg")
+        if os.path.exists(logo_path):
+            col1, _ = st.columns([0.6, 0.6])
+            with col1:
+                st.image(logo_path, use_column_width=True)
 
-        st.caption(
-            f"""<p align="left">欢迎您，{'管理员' if is_admin else '用户'}{usname}！当前版本：{1.1}</p>""",
-            unsafe_allow_html=True,
+        lang = st.selectbox(
+            t(lang, "language_label"),
+            options=list(LANGUAGES.keys()),
+            format_func=lambda code: LANGUAGES[code],
+            key="lang",
         )
-        st.caption(f"LightRAG LLM: {settings.LIGHTRAG_LLM_MODEL}")
-        st.caption(f"检索模式: {settings.LIGHTRAG_QUERY_MODE}")
 
-        if st.button("新建对话窗口"):
+        if st.button(t(lang, "new_chat"), use_container_width=True):
             conversation = create_conversation(user_id)
             st.session_state[active_key] = conversation.id
             st.rerun()
@@ -80,102 +93,180 @@ def main(is_admin: bool, usname: str, user_id: int) -> None:
         if not conversations:
             conversations = [get_or_create_default_conversation(user_id)]
 
-        conversation_ids = [conversation.id for conversation in conversations]
+        conversation_ids = [c.id for c in conversations]
         if st.session_state.get(active_key) not in conversation_ids:
             st.session_state[active_key] = conversation_ids[0]
+        if st.session_state.get(rename_key) not in conversation_ids:
+            st.session_state[rename_key] = None
+        if st.session_state.get(delete_key) not in conversation_ids:
+            st.session_state[delete_key] = None
 
-        labels = {
-            conversation.id: f"{conversation.title} #{conversation.id}"
-            for conversation in conversations
-        }
-        selected_conversation_id = st.selectbox(
-            "请选择对话窗口:",
-            conversation_ids,
-            index=conversation_ids.index(st.session_state[active_key]),
-            format_func=lambda value: _conversation_label(value, labels),
+        labels = {c.id: c.title for c in conversations}
+        st.markdown(
+            f'<p class="apple-sidebar-section-label">{html.escape(t(lang, "select_chat"))}</p>',
+            unsafe_allow_html=True,
         )
-        active_conversation_id = int(selected_conversation_id)
-        st.session_state[active_key] = active_conversation_id
+        for conversation in conversations:
+            label = _conversation_label(conversation.id, labels, lang)
+            if st.session_state.get(rename_key) == conversation.id:
+                input_key = f"rename_input_{user_id}_{conversation.id}"
+                if input_key not in st.session_state:
+                    st.session_state[input_key] = conversation.title
 
-        show_ent = show_int = show_prompt = False
+                st.text_input(
+                    t(lang, "rename_conversation"),
+                    key=input_key,
+                    label_visibility="collapsed",
+                )
+                save_col, cancel_col = st.columns([0.58, 0.42])
+                with save_col:
+                    if st.button(
+                        t(lang, "save"),
+                        key=f"rename_save_{user_id}_{conversation.id}",
+                        use_container_width=True,
+                    ):
+                        rename_conversation(
+                            user_id,
+                            conversation.id,
+                            str(st.session_state[input_key]),
+                        )
+                        st.session_state[rename_key] = None
+                        st.rerun()
+                with cancel_col:
+                    if st.button(
+                        t(lang, "cancel"),
+                        key=f"rename_cancel_{user_id}_{conversation.id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[rename_key] = None
+                        st.rerun()
+                continue
+
+            if st.session_state.get(delete_key) == conversation.id:
+                st.markdown(
+                    f'<div class="apple-conversation-active">{html.escape(label)}</div>',
+                    unsafe_allow_html=True,
+                )
+                confirm_col, cancel_col = st.columns([0.58, 0.42])
+                with confirm_col:
+                    if st.button(
+                        t(lang, "delete_confirm"),
+                        key=f"delete_confirm_{user_id}_{conversation.id}",
+                        use_container_width=True,
+                    ):
+                        delete_conversation(user_id, conversation.id)
+                        st.session_state[delete_key] = None
+                        if st.session_state.get(active_key) == conversation.id:
+                            st.session_state[active_key] = None
+                        st.rerun()
+                with cancel_col:
+                    if st.button(
+                        t(lang, "cancel"),
+                        key=f"delete_cancel_{user_id}_{conversation.id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state[delete_key] = None
+                        st.rerun()
+                continue
+
+            label_col, rename_col, delete_col = st.columns([0.58, 0.21, 0.21])
+            with label_col:
+                if conversation.id == st.session_state[active_key]:
+                    st.markdown(
+                        f'<div class="apple-conversation-active">{html.escape(label)}</div>',
+                        unsafe_allow_html=True,
+                    )
+                elif st.button(
+                    label,
+                    key=f"conversation_button_{user_id}_{conversation.id}",
+                    use_container_width=True,
+                ):
+                    st.session_state[active_key] = conversation.id
+                    st.rerun()
+
+            with rename_col:
+                if st.button(
+                    "✎",
+                    key=f"rename_start_{user_id}_{conversation.id}",
+                    help=t(lang, "rename"),
+                    use_container_width=True,
+                ):
+                    st.session_state[f"rename_input_{user_id}_{conversation.id}"] = (
+                        conversation.title
+                    )
+                    st.session_state[rename_key] = conversation.id
+                    st.rerun()
+
+            with delete_col:
+                if st.button(
+                    "✕",
+                    key=f"delete_start_{user_id}_{conversation.id}",
+                    help=t(lang, "delete"),
+                    use_container_width=True,
+                ):
+                    st.session_state[delete_key] = conversation.id
+                    st.session_state[rename_key] = None
+                    st.rerun()
+
+        active_conversation_id = int(st.session_state[active_key])
+
         if is_admin:
-            show_ent = st.sidebar.checkbox("显示实体抽取模式")
-            show_int = st.sidebar.checkbox("显示检索路由模式")
-            show_prompt = st.sidebar.checkbox("显示 LightRAG 配置")
-            if st.button("打开 Neo4j 图谱"):
-                st.markdown("[点击这里打开 Neo4j](http://127.0.0.1:7474/)", unsafe_allow_html=True)
+            if st.button(t(lang, "neo4j_button"), use_container_width=True):
+                st.markdown(
+                    f"[{t(lang, 'click_open_neo4j')}](http://127.0.0.1:7474/)",
+                    unsafe_allow_html=True,
+                )
 
-        if st.button("返回登录"):
-            st.session_state.logged_in = False
-            st.session_state.admin = False
-            st.session_state.usname = ""
-            st.session_state.user_id = None
+        st.divider()
+        if st.button(t(lang, "logout"), use_container_width=True):
+            revoke_auth_session(get_query_session_token())
+            clear_query_session_token()
+            for key in ("logged_in", "admin", "usname", "user_id"):
+                st.session_state[key] = (False if key == "logged_in" else
+                                         False if key == "admin" else
+                                         "" if key == "usname" else None)
             st.rerun()
 
+    # ── 消息历史 ──
     current_messages = list_messages(active_conversation_id)
 
     for message in current_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
-            if message["role"] == "assistant":
-                if show_ent:
-                    with st.expander("实体抽取模式"):
-                        st.write(message.get("ent", "未使用独立 BERT NER。"))
-                if show_int:
-                    with st.expander("检索路由模式"):
-                        st.write(message.get("yitu", f"LightRAG query mode={settings.LIGHTRAG_QUERY_MODE}"))
-                if show_prompt:
-                    with st.expander("LightRAG 配置"):
-                        st.write(message.get("prompt", runtime_summary()))
 
-    if query := st.chat_input("Ask me anything!", key=f"chat_input_{active_conversation_id}"):
+    # ── 输入框 & 推理 ──
+    if query := st.chat_input(
+        t(lang, "chat_placeholder"), key=f"chat_input_{active_conversation_id}"
+    ):
         history = recent_history(active_conversation_id, limit=10)
         add_message(active_conversation_id, "user", query)
         current_messages.append({"role": "user", "content": query})
+
         with st.chat_message("user"):
             st.markdown(query)
 
         response_placeholder = st.empty()
-        response_placeholder.text("正在查询 LightRAG 知识库...")
+        response_placeholder.text(t(lang, "querying"))
 
-        debug_payload = _debug_payload()
         try:
             answer = ask_lightrag(query, history)
-        except Exception as exc:
+        except Exception:
             logger.exception("LightRAG 查询失败")
-            answer = (
-                "LightRAG 查询失败。请确认已安装 lightrag-hku，Neo4j Bolt 服务、"
-                "Ollama LLM 和 embedding 模型都已启动并完成索引构建。"
-            )
-            debug_payload["prompt"] = f"{runtime_summary()}\nerror={exc}"
+            answer = t(lang, "query_failed")
 
         response_placeholder.empty()
+
         with st.chat_message("assistant"):
             st.markdown(answer)
-            if show_ent:
-                with st.expander("实体抽取模式"):
-                    st.write(debug_payload["ent"])
-            if show_int:
-                with st.expander("检索路由模式"):
-                    st.write(debug_payload["yitu"])
-            if show_prompt:
-                with st.expander("LightRAG 配置"):
-                    st.write(debug_payload["prompt"])
 
         current_messages.append(
             {
                 "role": "assistant",
                 "content": answer,
-                "yitu": debug_payload["yitu"],
-                "prompt": debug_payload["prompt"],
-                "ent": debug_payload["ent"],
             }
         )
         add_message(
             active_conversation_id,
             "assistant",
             answer,
-            yitu=debug_payload["yitu"],
-            prompt=debug_payload["prompt"],
-            ent=debug_payload["ent"],
         )

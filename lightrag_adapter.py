@@ -210,19 +210,3 @@ def run_async(coro: Coroutine[Any, Any, Any]) -> Any:
         raise result["error"]
     return result.get("value")
 
-
-def runtime_summary(settings_obj: Settings = settings) -> str:
-    """Return concise runtime details for the Streamlit admin panel."""
-    return (
-        f"LightRAG working_dir={settings_obj.LIGHTRAG_WORKING_DIR}; "
-        f"query_mode={settings_obj.LIGHTRAG_QUERY_MODE}; "
-        f"graph_storage={settings_obj.LIGHTRAG_GRAPH_STORAGE}; "
-        f"llm_provider={settings_obj.LLM_PROVIDER}; "
-        f"llm={settings_obj.LIGHTRAG_LLM_MODEL}; "
-        f"entity_types={','.join(settings_obj.LIGHTRAG_ENTITY_TYPES)}; "
-        f"llm_async={settings_obj.LIGHTRAG_LLM_MAX_ASYNC}; "
-        f"max_gleaning={settings_obj.LIGHTRAG_ENTITY_EXTRACT_MAX_GLEANING}; "
-        f"llm_timeout={settings_obj.LIGHTRAG_LLM_TIMEOUT}; "
-        f"embedding={settings_obj.LIGHTRAG_EMBEDDING_MODEL} "
-        f"({settings_obj.LIGHTRAG_EMBEDDING_DIM}d)"
-    )

@@ -1,4 +1,5 @@
 neo4j-community-5.18.1/
+/.venv/
 /.env
 /lightrag_storage/
 /tmp_data/app.db*

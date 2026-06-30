@@ -28,6 +28,8 @@ PBKDF2_PREFIX = "pbkdf2_sha256"
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin123"
 LEGACY_CREDENTIALS_PATH = Path("tmp_data") / "user_credentials.json"
+SESSION_TOKEN_BYTES = 32
+SESSION_TTL_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,16 @@ def get_user_by_username(username: str) -> AuthUser | None:
     return _row_to_user(row) if row else None
 
 
+def get_user_by_id(user_id: int) -> AuthUser | None:
+    """Return a user by id, or None when absent."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, is_admin FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _row_to_user(row) if row else None
+
+
 def create_user(username: str, password: str, *, is_admin: bool = False) -> AuthUser:
     """Create a user with a hashed password."""
     normalized = username.strip()
@@ -166,6 +178,66 @@ def authenticate_user(username: str, password: str) -> AuthUser | None:
     if not row or not verify_password(str(row["password_hash"]), password):
         return None
     return _row_to_user(row)
+
+
+def _session_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def cleanup_expired_auth_sessions() -> None:
+    """Remove expired persistent login sessions."""
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM auth_sessions WHERE expires_at <= datetime('now')"
+        )
+
+
+def create_auth_session(user_id: int, ttl_days: int = SESSION_TTL_DAYS) -> str:
+    """Create a persistent login session and return its raw token."""
+    if get_user_by_id(user_id) is None:
+        raise ValueError("用户不存在")
+
+    cleanup_expired_auth_sessions()
+    token = secrets.token_urlsafe(SESSION_TOKEN_BYTES)
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO auth_sessions (user_id, token_hash, expires_at)
+            VALUES (?, ?, datetime('now', ?))
+            """,
+            (user_id, _session_token_hash(token), f"+{ttl_days} days"),
+        )
+    return token
+
+
+def get_user_by_session_token(token: str | None) -> AuthUser | None:
+    """Return the user for a valid persistent login token."""
+    if not token:
+        return None
+
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT users.id, users.username, users.is_admin
+            FROM auth_sessions
+            JOIN users ON users.id = auth_sessions.user_id
+            WHERE auth_sessions.token_hash = ?
+              AND auth_sessions.expires_at > datetime('now')
+            """,
+            (_session_token_hash(token),),
+        ).fetchone()
+    return _row_to_user(row) if row else None
+
+
+def revoke_auth_session(token: str | None) -> None:
+    """Revoke one persistent login token."""
+    if not token:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM auth_sessions WHERE token_hash = ?",
+            (_session_token_hash(token),),
+        )
 
 
 def _legacy_credentials() -> dict[str, dict[str, Any]]:

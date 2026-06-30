@@ -58,11 +58,17 @@ def init_db() -> None:
                 conversation_id INTEGER NOT NULL,
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
-                ent TEXT,
-                yitu TEXT,
-                prompt TEXT,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
@@ -70,5 +76,39 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
                 ON messages(conversation_id, created_at ASC, id ASC);
+
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_token_hash
+                ON auth_sessions(token_hash);
+
+            CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at
+                ON auth_sessions(expires_at);
             """
         )
+        message_columns = {
+            str(row["name"]) for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if {"ent", "yitu", "prompt"} & message_columns:
+            conn.executescript(
+                """
+                DROP TABLE IF EXISTS messages_new;
+
+                CREATE TABLE messages_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_id INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+                );
+
+                INSERT INTO messages_new (id, conversation_id, role, content, created_at)
+                SELECT id, conversation_id, role, content, created_at
+                FROM messages;
+
+                DROP TABLE messages;
+                ALTER TABLE messages_new RENAME TO messages;
+
+                CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
+                    ON messages(conversation_id, created_at ASC, id ASC);
+                """
+            )

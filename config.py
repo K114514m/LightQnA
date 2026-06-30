@@ -1,12 +1,12 @@
 """项目集中配置。
 
 所有外部依赖参数（Neo4j 连接、ollama 模型名、本地模型/数据路径）都通过环境变量
-覆盖，未设置时使用与原代码完全一致的默认值，保证零回归。
+覆盖，未设置时使用本地开发默认值。
 
 使用方式::
 
     from config import settings
-    print(settings.NEO4J_URL)
+    print(settings.NEO4J_URI)
 
 环境变量列表见下方常量定义；亦可参考 README 的「环境变量」章节。
 """
@@ -91,10 +91,7 @@ class Settings:
     """运行时配置容器（不可变）。"""
 
     # --- Neo4j ---
-    NEO4J_URL: str
-    NEO4J_USER: str
     NEO4J_PASSWORD: str
-    NEO4J_DBNAME: str
     NEO4J_URI: str
     NEO4J_USERNAME: str
     NEO4J_DATABASE: str
@@ -131,13 +128,6 @@ class Settings:
     SUMMARY_LANGUAGE: str
     ENTITY_EXTRACTION_USE_JSON: str
 
-    # --- 本地模型与数据路径 ---
-    NER_MODEL_NAME: str         # HuggingFace BERT 路径（chinese-roberta-wwm-ext）
-    NER_CHECKPOINT: str         # 训练好的 NER 权重文件名（不含 .pt 后缀）
-    DATA_DIR: str
-    TMP_DIR: str
-    MODEL_DIR: str
-
     # --- 日志 ---
     LOG_LEVEL: str
 
@@ -168,10 +158,7 @@ def _build_settings() -> Settings:
     ]
 
     return Settings(
-        NEO4J_URL=_env("NEO4J_URL", "http://localhost:7474"),
-        NEO4J_USER=neo4j_user,
         NEO4J_PASSWORD=neo4j_password,
-        NEO4J_DBNAME=neo4j_dbname,
         NEO4J_URI=_env("NEO4J_URI", "neo4j://localhost:7687"),
         NEO4J_USERNAME=_env("NEO4J_USERNAME", neo4j_user),
         NEO4J_DATABASE=_env("NEO4J_DATABASE", neo4j_dbname),
@@ -204,11 +191,6 @@ def _build_settings() -> Settings:
         LIGHTRAG_LLM_TIMEOUT=_env_int("LIGHTRAG_LLM_TIMEOUT", 600),
         SUMMARY_LANGUAGE=_env("SUMMARY_LANGUAGE", "Chinese"),
         ENTITY_EXTRACTION_USE_JSON=_env("ENTITY_EXTRACTION_USE_JSON", "true"),
-        NER_MODEL_NAME=_env("NER_MODEL_NAME", "hfl/chinese-roberta-wwm-ext"),
-        NER_CHECKPOINT=_env("NER_CHECKPOINT", "best_roberta_rnn_model_ent_aug"),
-        DATA_DIR=_env("DATA_DIR", "data"),
-        TMP_DIR=_env("TMP_DIR", "tmp_data"),
-        MODEL_DIR=_env("MODEL_DIR", "model"),
         LOG_LEVEL=_env("LOG_LEVEL", "INFO"),
     )
 

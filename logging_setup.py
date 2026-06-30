@@ -1,6 +1,6 @@
 """统一日志初始化。
 
-各入口脚本（``login.py`` / ``ner_model.py`` / ``ner_data.py`` / ``build_up_graph.py``）
+各入口脚本（``login.py`` / ``webui.py`` / ``build_lightrag_index.py``）
 在 ``main`` 起始处调用 :func:`setup_logging`，模块级代码 ``logger = logging.getLogger(__name__)``
 即可获得带时间戳/级别/模块名的统一格式日志。
 """

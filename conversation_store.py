@@ -33,14 +33,10 @@ def _row_to_conversation(row: Any) -> Conversation:
 
 
 def _row_to_message(row: Any) -> dict[str, str]:
-    message = {
+    return {
         "role": str(row["role"]),
         "content": str(row["content"]),
     }
-    for key in ("ent", "yitu", "prompt"):
-        if row[key]:
-            message[key] = str(row[key])
-    return message
 
 
 def list_conversations(user_id: int) -> list[Conversation]:
@@ -89,6 +85,34 @@ def get_or_create_default_conversation(user_id: int) -> Conversation:
     return create_conversation(user_id)
 
 
+def rename_conversation(user_id: int, conversation_id: int, title: str) -> bool:
+    """Rename a user-owned conversation without changing its recency order."""
+    normalized_title = title.strip() or DEFAULT_CONVERSATION_TITLE
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE conversations
+            SET title = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (normalized_title, conversation_id, user_id),
+        )
+    return cursor.rowcount == 1
+
+
+def delete_conversation(user_id: int, conversation_id: int) -> bool:
+    """Delete a user-owned conversation and its messages."""
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM conversations
+            WHERE id = ? AND user_id = ?
+            """,
+            (conversation_id, user_id),
+        )
+    return cursor.rowcount == 1
+
+
 def user_owns_conversation(user_id: int, conversation_id: int) -> bool:
     """Return whether a conversation belongs to a user."""
     with get_connection() as conn:
@@ -107,10 +131,6 @@ def add_message(
     conversation_id: int,
     role: str,
     content: str,
-    *,
-    ent: str | None = None,
-    yitu: str | None = None,
-    prompt: str | None = None,
 ) -> None:
     """Append one message and touch the parent conversation."""
     if role not in {"user", "assistant"}:
@@ -121,10 +141,10 @@ def add_message(
     with get_connection() as conn:
         conn.execute(
             """
-            INSERT INTO messages (conversation_id, role, content, ent, yitu, prompt)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (conversation_id, role, content)
+            VALUES (?, ?, ?)
             """,
-            (conversation_id, role, content, ent, yitu, prompt),
+            (conversation_id, role, content),
         )
         conn.execute(
             """
@@ -141,7 +161,7 @@ def list_messages(conversation_id: int) -> list[dict[str, str]]:
     with get_connection() as conn:
         rows = conn.execute(
             """
-            SELECT role, content, ent, yitu, prompt
+            SELECT role, content
             FROM messages
             WHERE conversation_id = ?
             ORDER BY created_at ASC, id ASC
