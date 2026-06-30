@@ -1,0 +1,1 @@
+"""LightQnA application package."""

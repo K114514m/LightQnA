@@ -6,4 +6,6 @@ neo4j-community-5.18.1/
 model/chinese-roberta-wwm-ext/
 model/best_roberta_rnn_model_ent_aug.pt
 __pycache__/
-tests/
+.pytest_cache/
+.DS_Store
+assets/img/.DS_Store
