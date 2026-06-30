@@ -2,7 +2,7 @@
 
 [中文](#中文) | [日本語](#日本語) | [English](#english)
 
-## 中文
+<a id="中文"></a>
 
 ## 项目简介
 
@@ -147,7 +147,7 @@ password: admin123
 python scripts/lightrag_query.py "百日咳有哪些症状和治疗方法？"
 ```
 
-## 日本語
+<a id="日本語"></a>
 
 ## プロジェクト概要
 
@@ -292,7 +292,7 @@ CLI からも検索できます。
 python scripts/lightrag_query.py "百日咳の症状と治療法は？"
 ```
 
-## English
+<a id="english"></a>
 
 ## Project Overview
 
