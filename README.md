@@ -51,7 +51,7 @@ LightQnA/
 |   |-- build_lightrag_index.py
 |   |-- lightrag_query.py
 |   `-- processjson.py
-|-- assets/img/               # README 和 Web UI 图片资源
+|-- assets/img/               # Web UI 图片资源
 |-- data/                     # 医学数据源
 |-- requirements.txt          # Python 依赖
 `-- .env.example              # 环境变量示例
@@ -196,7 +196,7 @@ LightQnA/
 |   |-- build_lightrag_index.py
 |   |-- lightrag_query.py
 |   `-- processjson.py
-|-- assets/img/               # README と Web UI の画像リソース
+|-- assets/img/               # Web UI の画像リソース
 |-- data/                     # 医療データソース
 |-- requirements.txt          # Python 依存関係
 `-- .env.example              # 環境変数サンプル
@@ -341,7 +341,7 @@ LightQnA/
 |   |-- build_lightrag_index.py
 |   |-- lightrag_query.py
 |   `-- processjson.py
-|-- assets/img/               # README and Web UI image assets
+|-- assets/img/               # Web UI image assets
 |-- data/                     # Medical data sources
 |-- requirements.txt          # Python dependencies
 `-- .env.example              # Environment variable example

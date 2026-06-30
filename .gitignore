@@ -1,10 +1,10 @@
 neo4j-community-5.18.1/
 /.venv/
 /.env
+/.vscode/
 /lightrag_storage/
-/tmp_data/app.db*
-model/chinese-roberta-wwm-ext/
-model/best_roberta_rnn_model_ent_aug.pt
+/tmp_data/
+/model/
 __pycache__/
 .pytest_cache/
 .DS_Store
